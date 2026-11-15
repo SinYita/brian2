@@ -666,12 +666,6 @@ def test_cpp_support_code_typed_operators_and_functions(tmp_path):
         pow_support_code,
     )
 
-    for code in (mod_support_code, floordiv_support_code):
-        assert "static_cast<result_type>" in code
-        assert "1.0*" not in code
-        assert "{{" not in code
-        assert "}}" not in code
-
     cxx = shutil.which("g++") or shutil.which("c++")
     if cxx is None:
         pytest.skip("No C++ compiler found on PATH")
@@ -727,9 +721,19 @@ def test_cpp_support_code_typed_operators_and_functions(tmp_path):
             if (_brian_pow(-0.5f, 3) != -0.125f) return 4;
             if (_brian_pow(2.0f, -2) != 0.25f) return 5;
             if (_brian_pow(0.0f, 0) != 1.0f) return 6;
-            if (!std::isinf(_exprel(90.0f))) return 7;
-            if (_exprel(0.0f) != 1.0f) return 8;
-            if (_clip(int32_t(-1), -0.5, 1.5) != -0.5) return 9;
+            if (!std::isfinite(_exprel(90.0f))) return 7;
+            if (!std::isinf(_exprel(94.0f))) return 8;
+            if (_exprel(0.0f) != 1.0f) return 9;
+            if (_clip(int32_t(-1), -0.5, 1.5) != -0.5) return 10;
+            // float32 arithmetic has to match NumPy, not plain float rounding
+            if (_brian_floordiv(0.7f, 0.1f) != 6.0f) return 11;
+            if (_brian_floordiv(1.0f, 0.1f) != 9.0f) return 12;
+            if (std::fabs(_brian_mod(0.7f, 0.1f) - 0.09999998f) > 1e-7f) return 13;
+            if (std::fabs(_brian_mod(-0.7f, 0.1f) - 2.2351742e-08f) > 1e-7f) return 14;
+            // subnormal results and large exponents must not be lost
+            if (std::fabs(_brian_pow(2.0f, -128) / 2.93873588e-39f - 1.0f) > 1e-6f) return 15;
+            if (std::fabs(_brian_pow(1.0000001f, 1000000) - 1.1266056f) > 1e-6f) return 16;
+            if (std::fabs(_exprel(90.0f) / 1.35600366e+37f - 1.0f) > 1e-5f) return 17;
             return 0;
         }}
         """

@@ -105,8 +105,10 @@ template < typename T1, typename T2 >
 static inline typename _higher_type<T1,T2>::type
 _brian_mod(T1 x, T2 y)
 {
-    typedef typename _higher_type<T1,T2>::type result_type;
-    return x-y*std::floor(static_cast<result_type>(x)/static_cast<result_type>(y));
+    // Perform the quotient in double precision: computing e.g. 0.7f/0.1f in
+    // single precision rounds to exactly 7.0f, which gives a negative
+    // remainder. This matches NumPy's behaviour for float32 inputs.
+    return x-y*std::floor(1.0*x/y);
 }
 
 // Specific implementations for integer types
@@ -150,8 +152,9 @@ template < typename T1, typename T2 >
 static inline typename _higher_type<T1,T2>::type
 _brian_floordiv(T1 x, T2 y)
 {
-    typedef typename _higher_type<T1,T2>::type result_type;
-    return std::floor(static_cast<result_type>(x)/static_cast<result_type>(y));
+    // See the comment in _brian_mod: the quotient has to be computed in
+    // double precision to avoid rounding errors for float32 inputs.
+    return std::floor(1.0*x/y);
 }
 
 // Specific implementations for integer types
@@ -219,15 +222,6 @@ namespace _brian_pow_detail {
 
     template <bool B, typename T = void> struct enable_if {};
     template <typename T> struct enable_if<true, T> { typedef T type; };
-
-    template <typename T, bool Signed = int_traits<T>::is_signed>
-    struct neg_helper {
-        static inline bool is_neg(T y) { return y < static_cast<T>(0); }
-    };
-    template <typename T>
-    struct neg_helper<T, false> {
-        static inline bool is_neg(T) { return false; }
-    };
 }
 
 template <typename T1, typename T2>
@@ -245,23 +239,11 @@ static inline typename _brian_pow_detail::enable_if<
     float>::type
 _brian_pow(T1 x, T2 y)
 {
-    if (y == 0)
-        return 1.0f;
-    const bool neg = _brian_pow_detail::neg_helper<T2>::is_neg(y);
-    unsigned long long exp = neg
-        ? (0ULL - static_cast<unsigned long long>(y))
-        : static_cast<unsigned long long>(y);
-    float result = 1.0f;
-    float base = x;
-    while (exp > 0)
-    {
-        if (exp & 1ULL)
-            result *= base;
-        exp >>= 1;
-        if (exp > 0)
-            base *= base;
-    }
-    return neg ? (1.0f / result) : result;
+    // Use the float overload of std::pow to preserve subnormal results and
+    // accuracy for large exponents (see e.g. 2.0f ** -128). Casting the
+    // exponent to float makes sure that the float overload is selected instead
+    // of the "additional overloads" that promote integers to double.
+    return std::pow(x, static_cast<float>(y));
 }
 
 template <typename T1, typename T2>
@@ -703,14 +685,6 @@ for func, func_cpp in [
     )
 
 exprel_code = """
-static inline float _exprel(float x)
-{
-    if (std::fabs(x) < 1e-16f)
-        return 1.0f;
-    if (x > 89.f)
-        return static_cast<float>(INFINITY);
-    return std::expm1(x) / x;
-}
 static inline double _exprel(double x)
 {
     if (std::fabs(x) < 1e-16)
@@ -718,6 +692,13 @@ static inline double _exprel(double x)
     if (x > 717)
         return INFINITY;
     return std::expm1(x) / x;
+}
+static inline float _exprel(float x)
+{
+    // Compute in double precision and round at the end: expm1 overflows a
+    // float far earlier than a double, and the float result is representable
+    // up to x ~= 93.3.
+    return static_cast<float>(_exprel(static_cast<double>(x)));
 }
 template <typename T>
 static inline double _exprel(T x)

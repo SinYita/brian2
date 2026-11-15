@@ -1011,6 +1011,7 @@ def test_repeated_function_dependencies():
 
 @pytest.mark.standalone_compatible
 def test_binomial():
+    seed(12345)
     binomial_f_approximated = BinomialFunction(100, 0.1, approximate=True)
     binomial_f = BinomialFunction(100, 0.1, approximate=False)
     # Regression checks:
@@ -1040,8 +1041,15 @@ def test_binomial():
     run(1 * ms)
     assert np.var(mon[0].x) > 0
     assert np.var(mon[0].y) > 0
-    assert 220 < np.mean(G.z[:]) < 280
-    assert 13.5 < np.mean(G.w[:]) < 18.5
+    # n=500, p=0.5: mean 250, variance 125. The generated code used to start
+    # from qn = 0.5**500 (3e-151), which was formatted as 0 and made the
+    # sampling loop non-terminating.
+    assert 235 < np.mean(G.z[:]) < 265
+    # n=20, p=0.8: mean 16, variance 3.2. The Cython implementation used to
+    # use p instead of 1-p for the reversed sampling, resulting in a mean of
+    # ~18.3 and a support restricted to 18..20.
+    assert 15.5 < np.mean(G.w[:]) < 16.5
+    assert 2.2 < np.var(G.w[:]) < 4.2
 
 
 @pytest.mark.standalone_compatible

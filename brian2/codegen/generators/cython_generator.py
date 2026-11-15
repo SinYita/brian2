@@ -156,7 +156,15 @@ class CythonCodeGenerator(CodeGenerator):
                 firstline = False
             code = "\n".join(codelines)
         else:
-            code = f"{var} {op} {self.translate_expression(expr)}"
+            expr_code = self.translate_expression(expr)
+            if brian_dtype_from_dtype(statement.dtype) == "integer":
+                # Cython does not implicitly convert floating point expressions
+                # to integer types in typed assignments (unlike C). This occurs
+                # for example for clip(integer_value, -0.5, 1.5), whose result
+                # has a floating point type but is assigned to an integer
+                # variable.
+                expr_code = f"<{get_cpp_dtype(statement.dtype)}>({expr_code})"
+            code = f"{var} {op} {expr_code}"
         if len(comment):
             code += f" # {comment}"
         return code
@@ -703,20 +711,28 @@ DEFAULT_FUNCTIONS["sign"].implementations.add_implementation(
 )
 
 clip_code = """
-ctypedef fused _to_clip:
-    char
-    short
-    int
-    long
-    float
-    double
-
-cdef _to_clip _clip(_to_clip x, double low, double high):
-    if x < low:
-        return <_to_clip?>low
-    if x > high:
-        return <_to_clip?>high
-    return x
+cdef extern from *:
+    \"\"\"
+    template <typename T1, typename T2, typename T3>
+    inline auto _clip(const T1 value, const T2 a_min, const T3 a_max)
+        -> decltype(value + a_min + a_max)
+    {
+        typedef decltype(value + a_min + a_max) result_type;
+        const result_type v = static_cast<result_type>(value);
+        const result_type lo = static_cast<result_type>(a_min);
+        const result_type hi = static_cast<result_type>(a_max);
+        if (v < lo)
+            return lo;
+        if (v > hi)
+            return hi;
+        return v;
+    }
+    \"\"\"
+    # The C++ template returns the common type of all three arguments, so that
+    # e.g. clip(integer_value, -0.5, 1.5) does not truncate the bounds. Cython
+    # has no dependent return types, so the result is declared as double; this
+    # is exact for all integer values below 2**53 and all float/double values.
+    double _clip[T1, T2, T3](T1 value, T2 a_min, T3 a_max)
 """
 DEFAULT_FUNCTIONS["clip"].implementations.add_implementation(
     CythonCodeGenerator, code=clip_code, name="_clip"
